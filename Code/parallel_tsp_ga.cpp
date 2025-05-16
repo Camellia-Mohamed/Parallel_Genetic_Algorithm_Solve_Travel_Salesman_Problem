@@ -3,81 +3,17 @@
 #include <cmath>
 #include <algorithm>
 #include <ctime>
-#include <omp.h>
 #include <random>
+#include <omp.h>
 
 using namespace std;
 
-#include "data.h"
+#include "data.h" // Make sure this defines: cities vector, CITY_COUNT, POP_SIZE, GENERATIONS, MUTATION_RATE, SELECTION_SIZE
 
-vector<double> fitness; // the total distance of the route
+vector<double> fitness; // total distance of each route
 vector<int> best_route;
 double best_fitness = 1e9;
-
-// Thread-safe way to update best route
-void updateBestRoute(const vector<int> &route, double route_fitness)
-{
-#pragma omp critical
-    {
-        if (route_fitness < best_fitness)
-        {
-            best_fitness = route_fitness;
-            best_route = route;
-        }
-    }
-}
-
-double distance(const City &a, const City &b)
-{
-    return sqrt(pow(a.x - b.x, 2) + pow(a.y - b.y, 2));
-}
-
-// calculate the total distance of the route
-double calculateTotalDistance(const vector<int> &route)
-{
-    if (route.size() != CITY_COUNT)
-        return 1e9;
-
-    double dist = 0;
-#pragma omp parallel for reduction(+ : dist)
-    for (int i = 0; i < CITY_COUNT - 1; ++i)
-    {
-        if (route[i] >= 0 && route[i] < CITY_COUNT &&
-            route[i + 1] >= 0 && route[i + 1] < CITY_COUNT)
-        {
-            dist += distance(cities[route[i]], cities[route[i + 1]]);
-        }
-        else
-        {
-            dist = 1e9;
-        }
-    }
-
-    // Add the return distance to start city
-    if (route[CITY_COUNT - 1] >= 0 && route[CITY_COUNT - 1] < CITY_COUNT &&
-        route[0] >= 0 && route[0] < CITY_COUNT)
-    {
-        dist += distance(cities[route[CITY_COUNT - 1]], cities[route[0]]);
-    }
-    else
-    {
-        return 1e9;
-    }
-    return dist;
-}
-
-int selectParent(mt19937 &gen)
-{
-    uniform_int_distribution<> dist(0, POP_SIZE - 1);
-    int best = dist(gen);
-    for (int i = 1; i < SELECTION_SIZE; ++i)
-    {
-        int idx = dist(gen);
-        if (fitness[idx] < fitness[best])
-            best = idx;
-    }
-    return best;
-}
+omp_lock_t best_lock;
 
 // Dynamic mutation rate that increases when stuck
 float getDynamicMutationRate(int generation, double current_best, double previous_best)
@@ -94,6 +30,57 @@ float getDynamicMutationRate(int generation, double current_best, double previou
 
     generations_without_improvement++;
     return min(0.5, MUTATION_RATE * (1.0 + generations_without_improvement / 1000.0));
+}
+
+double distance(const City &a, const City &b)
+{
+    return sqrt(pow(a.x - b.x, 2) + pow(a.y - b.y, 2));
+}
+
+// Calculate total route distance
+double calculateTotalDistance(const vector<int> &route)
+{
+    if (route.size() != CITY_COUNT)
+        return 1e9;
+
+    double dist = 0;
+    for (int i = 0; i < CITY_COUNT - 1; ++i)
+    {
+        if (route[i] >= 0 && route[i] < CITY_COUNT &&
+            route[i + 1] >= 0 && route[i + 1] < CITY_COUNT)
+        {
+            dist += distance(cities[route[i]], cities[route[i + 1]]);
+        }
+        else
+        {
+            return 1e9;
+        }
+    }
+    // Return to start city
+    if (route[CITY_COUNT - 1] >= 0 && route[CITY_COUNT - 1] < CITY_COUNT &&
+        route[0] >= 0 && route[0] < CITY_COUNT)
+    {
+        dist += distance(cities[route[CITY_COUNT - 1]], cities[route[0]]);
+    }
+    else
+    {
+        return 1e9;
+    }
+    return dist;
+}
+
+// Randomized tournament selection
+int selectParent(mt19937 &gen)
+{
+    uniform_int_distribution<> dist(0, POP_SIZE - 1);
+    int best = dist(gen);
+    for (int i = 1; i < SELECTION_SIZE; ++i)
+    {
+        int idx = dist(gen);
+        if (fitness[idx] < fitness[best])
+            best = idx;
+    }
+    return best;
 }
 
 // Order Crossover (OX) with random crossover points
@@ -168,101 +155,97 @@ void mutate(vector<int> &route, mt19937 &gen, float mutation_rate)
     }
 }
 
+// Evaluate fitness of entire population and update best route
 void evaluateFitness()
 {
     if (fitness.size() != POP_SIZE)
         fitness.resize(POP_SIZE);
 
     double local_best_fitness = 1e9;
-    vector<int> local_best_route;
-    local_best_route.resize(CITY_COUNT);
+    vector<int> local_best_route(CITY_COUNT);
+    vector<double> local_fitness(POP_SIZE);
 
 #pragma omp parallel
     {
-        double thread_best_fitness = 1e9;
-        vector<int> thread_best_route;
-        thread_best_route.resize(CITY_COUNT);
-
-#pragma omp for schedule(dynamic, 10) nowait
+#pragma omp for nowait
         for (int i = 0; i < POP_SIZE; ++i)
         {
             if (i < population.size() && population[i].size() == CITY_COUNT)
             {
-                double fit = calculateTotalDistance(population[i]);
-                fitness[i] = fit;
+                local_fitness[i] = calculateTotalDistance(population[i]);
 
-                if (fit < thread_best_fitness)
+                if (local_fitness[i] < local_best_fitness)
                 {
-                    thread_best_fitness = fit;
-                    thread_best_route = population[i];
-                }
-            }
-        }
-
 #pragma omp critical
-        {
-            if (thread_best_fitness < local_best_fitness)
-            {
-                local_best_fitness = thread_best_fitness;
-                local_best_route = thread_best_route;
+                    {
+                        if (local_fitness[i] < local_best_fitness)
+                        {
+                            local_best_fitness = local_fitness[i];
+                            local_best_route = population[i];
+                        }
+                    }
+                }
             }
         }
     }
 
-    updateBestRoute(local_best_route, local_best_fitness);
+// Update global fitness values
+#pragma omp parallel for
+    for (int i = 0; i < POP_SIZE; ++i)
+    {
+        fitness[i] = local_fitness[i];
+    }
+
+    // Update global best solution
+    omp_set_lock(&best_lock);
+    if (local_best_fitness < best_fitness)
+    {
+        best_fitness = local_best_fitness;
+        best_route = local_best_route;
+    }
+    omp_unset_lock(&best_lock);
 }
 
+// Generate next generation
 void nextGeneration()
 {
     if (population.size() != POP_SIZE)
         return;
 
     vector<vector<int>> new_population(POP_SIZE);
-    for (auto &route : new_population)
+    vector<mt19937> generators(omp_get_max_threads());
+
+// Initialize random number generators for each thread
+#pragma omp parallel
     {
-        route.resize(CITY_COUNT);
+        int tid = omp_get_thread_num();
+        random_device rd;
+        generators[tid] = mt19937(rd());
     }
 
-    // Get dynamic mutation rate
     float current_mutation_rate = getDynamicMutationRate(0, best_fitness, best_fitness);
 
 #pragma omp parallel
     {
-        // Each thread gets its own random number generator
-        random_device rd;
-        mt19937 gen(rd());
+        int tid = omp_get_thread_num();
+        mt19937 &gen = generators[tid];
 
-#pragma omp for schedule(dynamic, 10)
+#pragma omp for nowait
         for (int i = 0; i < POP_SIZE; ++i)
         {
-            try
-            {
-                int p1 = selectParent(gen);
-                int p2 = selectParent(gen);
+            int p1 = selectParent(gen);
+            int p2 = selectParent(gen);
 
-                if (p1 < population.size() && p2 < population.size())
-                {
-                    auto child = crossover(population[p1], population[p2], gen);
-                    mutate(child, gen, current_mutation_rate);
-                    new_population[i] = std::move(child);
-                }
-                else
-                {
-                    new_population[i] = population[i % population.size()];
-                }
-            }
-            catch (const exception &e)
-            {
-                cerr << "Error in thread " << omp_get_thread_num()
-                     << " at index " << i << ": " << e.what() << endl;
-                new_population[i] = population[i % population.size()];
-            }
+            auto child = crossover(population[p1], population[p2], gen);
+            mutate(child, gen, current_mutation_rate);
+            new_population[i] = child;
         }
     }
 
-    population = std::move(new_population);
+    population = new_population;
 }
 
+// Print best route and distance
 void printBestRoute()
 {
     cout << "Best Route Distance: " << best_fitness << endl;
@@ -276,58 +259,74 @@ int main()
 {
     try
     {
+        // Set number of threads
         int num_threads = omp_get_max_threads();
         omp_set_num_threads(num_threads);
 
+        omp_init_lock(&best_lock);
         fitness.resize(POP_SIZE);
         best_route.resize(CITY_COUNT);
 
-        // Initialize best_fitness with first route
-        best_fitness = calculateTotalDistance(population[0]);
-        best_route = population[0];
+        // Initialize with a constant route (0,1,2,...,CITY_COUNT-1)
+        for (int i = 0; i < CITY_COUNT; i++)
+        {
+            best_route[i] = i;
+        }
+        best_fitness = calculateTotalDistance(best_route);
 
-        cout << "Starting Parallel Genetic Algorithm..." << endl;
-        cout << "Number of Threads: " << num_threads << endl;
-        cout << "Population Size: " << POP_SIZE << endl;
-        cout << "Number of Cities: " << CITY_COUNT << endl;
-        cout << "Number of Generations: " << GENERATIONS << endl;
-        cout << "Initial Best Distance: " << best_fitness << endl;
+#pragma omp master
+        {
+            cout << "Starting Parallel Genetic Algorithm..." << endl;
+            cout << "Number of threads: " << num_threads << endl;
+            cout << "Population Size: " << POP_SIZE << endl;
+            cout << "Number of Cities: " << CITY_COUNT << endl;
+            cout << "Number of Generations: " << GENERATIONS << endl;
+            cout << "Initial Best Distance: " << best_fitness << endl;
+        }
 
-        double start = omp_get_wtime();
+        clock_t start = clock();
 
         for (int gen = 0; gen < GENERATIONS; ++gen)
         {
-            try
-            {
-                evaluateFitness();
-                nextGeneration();
+            evaluateFitness();
+            nextGeneration();
 
-                if (gen % 50 == 0)
+            if (gen % 1000 == 0)
+            {
+#pragma omp master
                 {
                     cout << "Generation " << gen << " - Best Distance: " << best_fitness << endl;
                 }
             }
-            catch (const exception &e)
-            {
-                cerr << "Error in generation " << gen << ": " << e.what() << endl;
-            }
         }
-        cout << "Generation " << GENERATIONS << " - Best Distance: " << best_fitness << endl;
 
-        double end = omp_get_wtime();
-        double execution_time = end - start;
+#pragma omp master
+        {
+            cout << "Generation " << GENERATIONS << " - Best Distance: " << best_fitness << endl;
+        }
 
-        cout << "\nFinal Results:" << endl;
-        printBestRoute();
-        cout << "Execution Time: " << execution_time << " seconds\n";
+        clock_t end = clock();
+        double exec_time = (double)(end - start) / CLOCKS_PER_SEC;
+
+#pragma omp master
+        {
+            cout << "\nFinal Results:" << endl;
+            printBestRoute();
+            cout << "Execution Time: " << exec_time << " seconds\n";
+        }
 
         double avg_fitness = 0.0;
-#pragma omp parallel for reduction(+ : avg_fitness) schedule(dynamic, 10)
+#pragma omp parallel for reduction(+ : avg_fitness)
         for (int i = 0; i < POP_SIZE; ++i)
             avg_fitness += fitness[i];
         avg_fitness /= POP_SIZE;
 
-        cout << "Average Fitness (last generation): " << avg_fitness << endl;
+#pragma omp master
+        {
+            cout << "Average Fitness (last generation): " << avg_fitness << endl;
+        }
+
+        omp_destroy_lock(&best_lock);
     }
     catch (const exception &e)
     {
