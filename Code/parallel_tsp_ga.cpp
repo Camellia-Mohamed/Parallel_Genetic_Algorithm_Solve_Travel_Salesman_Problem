@@ -27,9 +27,7 @@ double calculateTotalDistance(const vector<int> &route)
     for (int i = 0; i < CITY_COUNT - 1; ++i)
     {
             dist += distance(cities[route[i]], cities[route[i + 1]]);
-    
     }
-   
     dist += distance(cities[route[CITY_COUNT - 1]], cities[route[0]]);
 
     return dist;
@@ -177,12 +175,8 @@ void nextGeneration()
     vector<mt19937> generators(omp_get_max_threads());
 
     // Initialize random number generators for each thread
-    #pragma omp parallel
-    {
-        int tid = omp_get_thread_num();
-        random_device rd;
-        generators[tid] = mt19937(rd());
-    }
+    for (int i = 0; i < generators.size(); ++i)
+        generators[i].seed(i + time(0));
 
     float current_mutation_rate = getDynamicMutationRate(0, best_fitness, best_fitness);
 
@@ -197,6 +191,10 @@ void nextGeneration()
         {
             int p1 = selectParent(rnd);
             int p2 = selectParent(rnd);
+            while (p1 == p2)
+            {
+                p2 = selectParent(rnd);
+            }
             auto child = crossover(population[p1], population[p2], rnd);
             mutate(child, rnd, current_mutation_rate);
             new_population[i] = child;
@@ -227,7 +225,9 @@ int main()
     best_route.resize(CITY_COUNT);
     best_fitness = calculateTotalDistance(population[0]);
     best_route = population[0];
+
     cout<<"Initial Best Distance: "<<best_fitness<<endl;
+    
     clock_t start = clock();
 
     for (int gen = 0; gen < GENERATIONS; ++gen)

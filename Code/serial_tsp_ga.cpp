@@ -13,6 +13,35 @@ vector<double> fitness; // total distance of each route
 vector<int> best_route;
 double best_fitness = 1e9;
 
+
+
+double distance(const City &a, const City &b)
+{
+    return sqrt(pow(a.x - b.x, 2) + pow(a.y - b.y, 2));
+}
+
+// Calculate total route distance
+double calculateTotalDistance(const vector<int> &route)
+{
+    double dist = 0;
+    for (int i = 0; i < CITY_COUNT - 1; ++i)
+    {
+        
+        dist += distance(cities[route[i]], cities[route[i + 1]]);
+        
+    }
+    // Return to start city
+    if (route[CITY_COUNT - 1] >= 0 && route[CITY_COUNT - 1] < CITY_COUNT &&
+        route[0] >= 0 && route[0] < CITY_COUNT)
+    {
+        dist += distance(cities[route[CITY_COUNT - 1]], cities[route[0]]);
+    }
+    else
+    {
+        return 1e9;
+    }
+    return dist;
+}
 // Dynamic mutation rate that increases when stuck
 float getDynamicMutationRate(int generation, double current_best, double previous_best)
 {
@@ -29,44 +58,6 @@ float getDynamicMutationRate(int generation, double current_best, double previou
     generations_without_improvement++;
     return min(0.5, MUTATION_RATE * (1.0 + generations_without_improvement / 1000.0));
 }
-
-double distance(const City &a, const City &b)
-{
-    return sqrt(pow(a.x - b.x, 2) + pow(a.y - b.y, 2));
-}
-
-// Calculate total route distance
-double calculateTotalDistance(const vector<int> &route)
-{
-    if (route.size() != CITY_COUNT)
-        return 1e9;
-
-    double dist = 0;
-    for (int i = 0; i < CITY_COUNT - 1; ++i)
-    {
-        if (route[i] >= 0 && route[i] < CITY_COUNT &&
-            route[i + 1] >= 0 && route[i + 1] < CITY_COUNT)
-        {
-            dist += distance(cities[route[i]], cities[route[i + 1]]);
-        }
-        else
-        {
-            return 1e9;
-        }
-    }
-    // Return to start city
-    if (route[CITY_COUNT - 1] >= 0 && route[CITY_COUNT - 1] < CITY_COUNT &&
-        route[0] >= 0 && route[0] < CITY_COUNT)
-    {
-        dist += distance(cities[route[CITY_COUNT - 1]], cities[route[0]]);
-    }
-    else
-    {
-        return 1e9;
-    }
-    return dist;
-}
-
 // Randomized tournament selection
 int selectParent(mt19937 &gen)
 {
@@ -193,7 +184,10 @@ void nextGeneration()
     {
         int p1 = selectParent(gen);
         int p2 = selectParent(gen);
-
+        while (p1 == p2)
+        {
+            p2 = selectParent(gen);
+        }
         auto child = crossover(population[p1], population[p2], gen);
         mutate(child, gen, current_mutation_rate);
         new_population[i] = child;
@@ -214,54 +208,42 @@ void printBestRoute()
 
 int main()
 {
-    try
+
+    fitness.resize(POP_SIZE);
+    best_route.resize(CITY_COUNT);
+
+    // Initialize best_fitness and route with first population member
+    best_fitness = calculateTotalDistance(population[0]);
+    best_route = population[0];
+
+    cout << "Initial Best Distance: " << best_fitness << endl;
+
+    clock_t start = clock();
+
+    for (int gen = 0; gen < GENERATIONS; ++gen)
     {
-        fitness.resize(POP_SIZE);
-        best_route.resize(CITY_COUNT);
+        evaluateFitness();
+        nextGeneration();
 
-        // Initialize best_fitness and route with first population member
-        best_fitness = calculateTotalDistance(population[0]);
-        best_route = population[0];
-
-        cout << "Initial Best Distance: " << best_fitness << endl;
-
-        clock_t start = clock();
-
-        for (int gen = 0; gen < GENERATIONS; ++gen)
-        {
-            evaluateFitness();
-            nextGeneration();
-
-            if (gen % 1000 == 0)
-                cout << "Generation " << gen << " - Best Distance: " << best_fitness << endl;
-        }
-
-        cout << "Generation " << GENERATIONS << " - Best Distance: " << best_fitness << endl;
-
-        clock_t end = clock();
-        double exec_time = (double)(end - start) / CLOCKS_PER_SEC;
-
-        cout << "\nFinal Results:" << endl;
-        printBestRoute();
-        cout << "Execution Time: " << exec_time << " seconds\n";
-
-        double avg_fitness = 0.0;
-        for (int i = 0; i < POP_SIZE; ++i)
-            avg_fitness += fitness[i];
-        avg_fitness /= POP_SIZE;
-
-        cout << "Average Fitness (last generation): " << avg_fitness << endl;
+        if (gen % 1000 == 0)
+            cout << "Generation " << gen << " - Best Distance: " << best_fitness << endl;
     }
-    catch (const exception &e)
-    {
-        cerr << "Error occurred: " << e.what() << endl;
-        return 1;
-    }
-    catch (...)
-    {
-        cerr << "Unknown error occurred" << endl;
-        return 1;
-    }
+
+    cout << "Generation " << GENERATIONS << " - Best Distance: " << best_fitness << endl;
+
+    clock_t end = clock();
+    double exec_time = (double)(end - start) / CLOCKS_PER_SEC;
+
+    cout << "\nFinal Results:" << endl;
+    printBestRoute();
+    cout << "Execution Time: " << exec_time << " seconds\n";
+
+    double avg_fitness = 0.0;
+    for (int i = 0; i < POP_SIZE; ++i)
+        avg_fitness += fitness[i];
+    avg_fitness /= POP_SIZE;
+
+    cout << "Average Fitness (last generation): " << avg_fitness << endl;
 
     return 0;
 }
