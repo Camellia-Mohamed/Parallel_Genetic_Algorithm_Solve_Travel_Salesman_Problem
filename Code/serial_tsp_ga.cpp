@@ -223,10 +223,6 @@ int main()
         best_fitness = calculateTotalDistance(population[0]);
         best_route = population[0];
 
-        cout << "Starting Genetic Algorithm..." << endl;
-        cout << "Population Size: " << POP_SIZE << endl;
-        cout << "Number of Cities: " << CITY_COUNT << endl;
-        cout << "Number of Generations: " << GENERATIONS << endl;
         cout << "Initial Best Distance: " << best_fitness << endl;
 
         clock_t start = clock();
@@ -236,7 +232,7 @@ int main()
             evaluateFitness();
             nextGeneration();
 
-            if (gen % 50 == 0)
+            if (gen % 1000 == 0)
                 cout << "Generation " << gen << " - Best Distance: " << best_fitness << endl;
         }
 
