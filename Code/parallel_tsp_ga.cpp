@@ -174,9 +174,10 @@ void nextGeneration()
     vector<vector<int>> new_population(POP_SIZE);
     vector<mt19937> generators(omp_get_max_threads());
 
+    std::random_device rd;
     // Initialize random number generators for each thread
     for (int i = 0; i < generators.size(); ++i)
-        generators[i].seed(i + time(0));
+        generators[i].seed(rd()+i);
 
     float current_mutation_rate = getDynamicMutationRate(0, best_fitness, best_fitness);
 
